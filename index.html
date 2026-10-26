@@ -1,0 +1,173 @@
+<!DOCTYPE html>
+<html lang="fa" dir="rtl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>قرعه‌کشی خانوادگی</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root{
+    --bg:var(--tg-theme-bg-color,#ffffff); --fg:var(--tg-theme-text-color,#1b1b1f);
+    --hint:var(--tg-theme-hint-color,#6b7280); --card:var(--tg-theme-secondary-bg-color,#f3f4f6);
+    --accent:var(--tg-theme-button-color,#d4a017); --accent-fg:var(--tg-theme-button-text-color,#ffffff);
+    --ok:#16a34a; --warn:#dc2626; --gold:#b8860b;
+  }
+  *{box-sizing:border-box} html,body{margin:0}
+  body{background:var(--bg);color:var(--fg);font-family:Tahoma,"Segoe UI",system-ui,sans-serif;font-size:15px;line-height:1.7;padding:0 0 28px}
+  header{background:linear-gradient(135deg,#b8860b,#e6b422);color:#fff;padding:18px 16px 14px}
+  header h1{margin:0;font-size:19px} header p{margin:2px 0 0;font-size:13px;opacity:.95}
+  nav{display:flex;gap:6px;padding:10px 12px;overflow-x:auto;position:sticky;top:0;background:var(--bg);z-index:5}
+  nav button{flex:1;min-width:76px;border:0;border-radius:12px;padding:8px 6px;background:var(--card);color:var(--fg);font:inherit;font-size:13px}
+  nav button.on{background:var(--accent);color:var(--accent-fg)}
+  main{padding:4px 12px}
+  .card{background:var(--card);border-radius:16px;padding:14px;margin:10px 0}
+  .card h2{margin:0 0 8px;font-size:15px}
+  .row{display:flex;justify-content:space-between;gap:10px;padding:3px 0}
+  .row span:first-child{color:var(--hint)} .big{font-size:20px;font-weight:700}
+  .bar{height:10px;background:rgba(127,127,127,.25);border-radius:6px;overflow:hidden;margin:8px 0 2px}
+  .bar i{display:block;height:100%;background:var(--ok)}
+  .chip{display:inline-block;min-width:30px;text-align:center;padding:1px 8px;border-radius:10px;margin:2px;background:rgba(184,134,11,.18);color:var(--gold);font-weight:700}
+  .chip.won{background:rgba(127,127,127,.2);color:var(--hint);text-decoration:line-through}
+  .ok{color:var(--ok)} .bad{color:var(--warn)} .hint{color:var(--hint);font-size:12.5px}
+  .me{outline:2px solid var(--accent)}
+  input{width:100%;padding:10px;border-radius:10px;border:1px solid rgba(127,127,127,.35);background:var(--bg);color:var(--fg);font:inherit;direction:ltr;text-align:right}
+  label{display:block;margin:8px 0 3px;color:var(--hint);font-size:13px}
+  .empty{text-align:center;color:var(--hint);padding:26px 8px}
+  .formula{font-size:13px;color:var(--hint);margin-top:8px;line-height:1.9}
+</style>
+</head>
+<body>
+<header><h1>🪙 قرعه‌کشی خانوادگی طلا</h1><p id="sub">در حال بارگذاری…</p></header>
+<nav id="tabs"></nav>
+<main id="view"></main>
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) { try { tg.ready(); tg.expand(); } catch (e) {} }
+const FA = "۰۱۲۳۴۵۶۷۸۹";
+const fa = v => String(v).replace(/[0-9]/g, d => FA[d]);
+const num = v => fa(Math.round(v).toLocaleString("en-US").replace(/,/g, "٬"));
+const money = v => num(v) + " تومان";
+const gram = v => fa(String(+v.toFixed(3)).replace(".", "٫"));
+const ST = {scheduled:"منتظر موعد", collecting:"در حال جمع‌آوری واریزی‌ها", ready:"همه واریز کردن — آماده‌ی قرعه‌کشی", drawing:"در حال قرعه‌کشی"};
+const perShare = (price, s, g) => Math.ceil(price * s / g / 1000) * 1000;   // same formula as the bot
+let D = null, TAB = "status";
+
+async function decode() {
+  const h = location.hash.replace(/^#/, "");
+  if (!h) return null;
+  const [kind, data] = [h.slice(0, 1), h.slice(2)];
+  let b = data.replace(/-/g, "+").replace(/_/g, "/"); while (b.length % 4) b += "=";
+  let bytes = Uint8Array.from(atob(b), c => c.charCodeAt(0));
+  if (kind === "z") {
+    if (typeof DecompressionStream === "undefined") throw new Error("compress");
+    const ds = new DecompressionStream("deflate");
+    const out = new Response(new Blob([bytes]).stream().pipeThrough(ds));
+    bytes = new Uint8Array(await out.arrayBuffer());
+  }
+  return JSON.parse(new TextDecoder("utf-8").decode(bytes));
+}
+const esc = s => String(s).replace(/[&<>"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const chips = (m) => m.t.map(n => `<span class="chip${m.w.includes(n) ? " won" : ""}">${fa(n)}</span>`).join("");
+
+function statusView() {
+  const r = D.r, me = D.m.find(x => x.i === D.me);
+  let h = "";
+  if (!r) return `<div class="card empty">هنوز تاریخ شروع قرعه‌کشی ثبت نشده.</div>`;
+  const totalGold = D.cfg.s * (r.T) / D.cfg.g;
+  h += `<div class="card"><h2>🗓 نوبت ${fa(r.k)} از ${fa(r.T)}</h2>
+    <div class="row"><span>موعد</span><b>${esc(r.due)}</b></div>
+    <div class="row"><span>وضعیت</span><b>${ST[r.st] || r.st}</b></div>`;
+  if (r.ps) h += `<div class="row"><span>قیمت هر گرم طلا</span><b>${money(r.p)}</b></div>
+    <div class="row"><span>سهم هر امتیاز</span><b>${money(r.ps)}</b></div>
+    <div class="row"><span>جایزه‌ی این نوبت</span><b class="big">${money(r.pot)}</b></div>
+    <div class="hint">معادل ${gram(totalGold)} گرم طلا</div>`;
+  h += `</div>`;
+  if (me) {
+    const req = me.s * r.ps;
+    h += `<div class="card me"><h2>👤 وضعیت من</h2>
+      <div class="row"><span>امتیاز من</span><b>${fa(me.s)}</b></div>
+      <div class="row"><span>شماره‌های من</span><span>${chips(me)}</span></div>`;
+    if (r.ps) {
+      h += `<div class="row"><span>مبلغ این نوبت</span><b>${money(req)}</b></div>`;
+      h += me.d > 0 ? `<div class="row"><span>مانده‌ی واریز</span><b class="bad">${money(me.d)}</b></div>`
+                    : `<div class="row"><span>پرداخت</span><b class="ok">کامل ✅</b></div>`;
+      if (me.c > 0) h += `<div class="row"><span>اضافه‌پرداختی</span><b>${money(me.c)}</b></div>`;
+    }
+    h += `</div>`;
+  }
+  if (r.ps) {
+    const done = D.m.filter(x => x.d === 0).length, late = D.m.filter(x => x.d > 0);
+    h += `<div class="card"><h2>💳 پیشرفت واریزها</h2>
+      <div class="bar"><i style="width:${D.m.length ? done * 100 / D.m.length : 0}%"></i></div>
+      <div class="hint">${fa(done)} از ${fa(D.m.length)} نفر کامل واریز کرده‌اند</div>`;
+    if (late.length) h += `<div style="margin-top:8px">` + late.map(x => `<div class="row"><span>⏳ ${esc(x.n)}</span><b class="bad">${money(x.d)}</b></div>`).join("") + `</div>`;
+    h += `</div>`;
+  }
+  return h;
+}
+function membersView() {
+  const used = D.m.reduce((a, x) => a + x.s, 0);
+  let h = `<div class="card"><h2>👥 اعضا و شماره‌ها</h2><div class="hint">${fa(used)} امتیاز از ${fa(D.cfg.x)} امتیاز ظرفیت • شماره‌ی خط‌خورده = قبلاً برنده شده</div></div>`;
+  h += D.m.map(x => `<div class="card${x.i === D.me ? " me" : ""}"><div class="row"><b>${esc(x.n)}</b><span>${fa(x.s)} امتیاز</span></div><div>${chips(x)}</div></div>`).join("");
+  return h || `<div class="card empty">هنوز عضوی ثبت نشده.</div>`;
+}
+function winnersView() {
+  if (!D.w.length) return `<div class="card empty">هنوز قرعه‌کشی‌ای انجام نشده.</div>`;
+  return D.w.slice().reverse().map(w => `<div class="card"><div class="row"><b>🏆 نوبت ${fa(w.q)}</b><span>شماره ${fa(w.k)}</span></div>
+    <div class="row"><span>${esc(w.n)}</span><b>${money(w.p)}</b></div></div>`).join("");
+}
+function calcView() {
+  const s = D ? D.cfg.s : 100, g = D ? D.cfg.g : 1000, T = D ? D.cfg.x : 10;
+  const me = D && D.m.find(x => x.i === D.me);
+  const p0 = D && D.r && D.r.p ? D.r.p : "";
+  return `<div class="card"><h2>📐 ماشین‌حساب</h2>
+    <label>قیمت هر گرم طلا (تومان)</label><input id="price" inputmode="numeric" value="${p0}" placeholder="مثلاً 7000000">
+    <label>تعداد امتیاز من</label><input id="sh" inputmode="numeric" value="${me ? me.s : 1}">
+    <label>مجموع امتیازها</label><input id="tot" inputmode="numeric" value="${D && D.r ? D.r.T : T}">
+    <div id="out" style="margin-top:12px"></div>
+    <div class="formula">سهم یک امتیاز = گردبه‌بالا( قیمت × ${fa(s)} ÷ ${fa(g)} ) تا هزار تومان<br>
+    مبلغ من = امتیاز من × سهم یک امتیاز<br>جایزه = مجموع امتیازها × سهم یک امتیاز<br>
+    اگر قیمت بالا رفت: مانده = (امتیاز × سهم جدید) − پرداخت‌شده</div></div>
+    <div class="card"><h2>🔁 اگر قیمت عوض شود</h2>
+    <label>قیمت قبلی</label><input id="p1" inputmode="numeric"><label>قیمت جدید</label><input id="p2" inputmode="numeric">
+    <div id="out2" style="margin-top:12px"></div></div>`;
+}
+function wireCalc() {
+  const s = D ? D.cfg.s : 100, g = D ? D.cfg.g : 1000, $ = i => document.getElementById(i);
+  const val = i => parseInt(String($(i).value).replace(/[^0-9]/g, ""), 10) || 0;
+  const run = () => {
+    const P = val("price"), S = val("sh"), T = val("tot");
+    if (!P) { $("out").innerHTML = `<span class="hint">قیمت را بنویسید.</span>`; }
+    else { const ps = perShare(P, s, g);
+      $("out").innerHTML = `<div class="row"><span>سهم یک امتیاز</span><b>${money(ps)}</b></div>
+        <div class="row"><span>مبلغ من (${fa(S)} امتیاز)</span><b>${money(S * ps)}</b></div>
+        <div class="row"><span>جایزه‌ی هر نوبت (${fa(T)} امتیاز)</span><b>${money(T * ps)}</b></div>
+        <div class="row"><span>معادل طلا</span><b>${gram(T * s / g)} گرم</b></div>`; }
+    const a = val("p1"), b = val("p2");
+    if (a && b) { const d = S * (perShare(b, s, g) - perShare(a, s, g));
+      $("out2").innerHTML = d > 0 ? `<div class="row"><span>کسی که قبلاً کامل داده، باید اضافه کند</span><b class="bad">${money(d)}</b></div>`
+        : d < 0 ? `<div class="row"><span>اضافه‌پرداختی (بستانکار)</span><b class="ok">${money(-d)}</b></div>` : `<span class="hint">تغییری ندارد.</span>`; }
+    else $("out2").innerHTML = "";
+  };
+  ["price", "sh", "tot", "p1", "p2"].forEach(i => $(i).addEventListener("input", run)); run();
+}
+function render() {
+  const tabs = [["status","وضعیت"],["members","اعضا"],["winners","برنده‌ها"],["calc","محاسبه"]];
+  document.getElementById("tabs").innerHTML = tabs.map(([k, t]) => `<button class="${TAB === k ? "on" : ""}" data-k="${k}">${t}</button>`).join("");
+  document.querySelectorAll("#tabs button").forEach(b => b.onclick = () => { TAB = b.dataset.k; render(); });
+  const v = document.getElementById("view");
+  if (!D && TAB !== "calc") { v.innerHTML = `<div class="card empty">این صفحه باید از داخل ربات باز شود 🌹<br>دکمه «📱 مینی‌اپ» را در ربات بزنید.</div>`; return; }
+  v.innerHTML = {status: statusView, members: membersView, winners: winnersView, calc: calcView}[TAB]();
+  if (TAB === "calc") wireCalc();
+}
+(async () => {
+  try { D = await decode(); } catch (e) {
+    document.getElementById("sub").textContent = "خطا در خواندن اطلاعات";
+    document.getElementById("view").innerHTML = `<div class="card empty">اطلاعات خوانده نشد. مینی‌اپ را دوباره از ربات باز کنید.</div>`; return;
+  }
+  document.getElementById("sub").textContent = D ? `آخرین به‌روزرسانی: ${D.ts}` : "ماشین‌حساب و اطلاعات";
+  render();
+})();
+</script>
+</body>
+</html>
